@@ -4,8 +4,6 @@ from flask import Flask, render_template, request
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import json
-import bs4 as bs
-import urllib.request
 import pickle
 import requests
 from datetime import date, datetime
@@ -80,6 +78,7 @@ def recommend():
     rec_year = request.form['rec_year']
     rec_vote = request.form['rec_vote']
     rec_ids = request.form['rec_ids']
+    tmdb_reviews = request.form.get('tmdb_reviews', '[]')
 
     # get movie suggestions for auto complete
     suggestions = get_suggestions()
@@ -116,21 +115,25 @@ def recommend():
     cast_details = {cast_names[i]:[cast_ids[i], cast_profiles[i], cast_bdays[i], cast_places[i], cast_bios[i]] for i in range(len(cast_places))}
 
     if(imdb_id != ""):
-        # web scraping to get user reviews from IMDB site
-        sauce = urllib.request.urlopen('https://www.imdb.com/title/{}/reviews?ref_=tt_ov_rt'.format(imdb_id)).read()
-        soup = bs.BeautifulSoup(sauce,'lxml')
-        soup_result = soup.find_all("div",{"class":"text show-more__control"})
+        # Reviews are now fetched client-side from TMDB's reviews API and passed here.
+        # IMDB scraping is no longer possible — AWS WAF blocks all server-side requests.
+        reviews_list = []
+        reviews_status = []
 
-        reviews_list = [] # list of reviews
-        reviews_status = [] # list of comments (good or bad)
-        for reviews in soup_result:
-            if reviews.string:
-                reviews_list.append(reviews.string)
-                # passing the review to our model
-                movie_review_list = np.array([reviews.string])
-                movie_vector = vectorizer.transform(movie_review_list)
-                pred = clf.predict(movie_vector)
-                reviews_status.append('Positive' if pred else 'Negative')
+        try:
+            raw_reviews = json.loads(tmdb_reviews)  # list of review text strings
+            seen_texts = set()
+            for review_text in raw_reviews:
+                review_text = review_text.strip()
+                if review_text and review_text not in seen_texts:
+                    seen_texts.add(review_text)
+                    reviews_list.append(review_text)
+                    movie_review_list = np.array([review_text])
+                    movie_vector = vectorizer.transform(movie_review_list)
+                    pred = clf.predict(movie_vector)
+                    reviews_status.append('Positive' if pred else 'Negative')
+        except Exception as e:
+            print("Error processing reviews:", e)
 
         # getting current date
         movie_rel_date = ""
@@ -140,8 +143,8 @@ def recommend():
             curr_date = datetime.strptime(today,'%Y-%m-%d')
             movie_rel_date = datetime.strptime(rel_date, '%Y-%m-%d')
 
-        # combining reviews and comments into a dictionary
-        movie_reviews = {reviews_list[i]: reviews_status[i] for i in range(len(reviews_list))}     
+        # list of (review, sentiment) tuples — avoids duplicate-key dict collisions
+        movie_reviews = list(zip(reviews_list, reviews_status))
 
         # passing all the data to the html file
         return render_template('recommend.html',title=title,poster=poster,overview=overview,vote_average=vote_average,

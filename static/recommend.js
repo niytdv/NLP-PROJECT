@@ -1,5 +1,5 @@
 // Replace 'YOUR_API_KEY' below with your API key retrieved from https://www.themoviedb.org
-var myAPI = 'YOUR_API_KEY'  // global string to be consistent with future usages elsewhere
+var myAPI = '65b74f8c5d53cc9b9453976ed658ebde'  // global string to be consistent with future usages elsewhere
 $(function() {
   $('#movie_list').css('display','none');
   $('#autoComplete').blur(function() {
@@ -181,7 +181,11 @@ function show_details(movie_details,movie_title,my_api_key,movie_id,movie_title_
 
   // calling `get_recommendations` to get the recommended movies for the given movie id from the TMDB API
   recommendations = get_recommendations(movie_id, my_api_key);
-  
+
+  // calling `get_tmdb_reviews` to fetch user reviews from TMDB
+  // (replaces IMDB scraping which is now blocked by AWS WAF)
+  tmdb_reviews = get_tmdb_reviews(movie_id, my_api_key);
+
   details = {
       'title':movie_title,
       'cast_ids':JSON.stringify(movie_cast.cast_ids),
@@ -206,7 +210,8 @@ function show_details(movie_details,movie_title,my_api_key,movie_id,movie_title_
       'rec_movies_org':JSON.stringify(recommendations.rec_movies_org),
       'rec_year':JSON.stringify(recommendations.rec_year),
       'rec_vote':JSON.stringify(recommendations.rec_vote),
-      'rec_ids':JSON.stringify(recommendations.rec_ids)
+      'rec_ids':JSON.stringify(recommendations.rec_ids),
+      'tmdb_reviews':JSON.stringify(tmdb_reviews.reviews)
   }
 
   $.ajax({
@@ -334,4 +339,30 @@ function get_movie_cast(movie_id,my_api_key){
       }
     });
     return {rec_movies:rec_movies,rec_movies_org:rec_movies_org,rec_posters:rec_posters,rec_year:rec_year,rec_vote:rec_vote,rec_ids:rec_ids};
+  }
+
+  // fetch user reviews from TMDB (replaces IMDB scraping which is blocked by AWS WAF)
+  function get_tmdb_reviews(movie_id, my_api_key) {
+    var reviews = [];
+    // Fetch up to 2 pages = up to 40 reviews
+    var pages = [1, 2];
+    for (var p = 0; p < pages.length; p++) {
+      $.ajax({
+        type: 'GET',
+        url: "https://api.themoviedb.org/3/movie/"+movie_id+"/reviews?api_key="+my_api_key+"&page="+pages[p],
+        async: false,
+        success: function(data) {
+          for (var i = 0; i < data.results.length; i++) {
+            var content = data.results[i].content;
+            if (content && content.trim().length > 0) {
+              reviews.push(content.trim());
+            }
+          }
+        },
+        error: function() {
+          // silently skip on error — reviews are optional
+        }
+      });
+    }
+    return {reviews: reviews};
   }
