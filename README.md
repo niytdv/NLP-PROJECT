@@ -1,80 +1,208 @@
-# The-Movie-Cinema
+# The Movie Cinema
 
 ![Python](https://img.shields.io/badge/Python-3.8+-blueviolet)
 ![Framework](https://img.shields.io/badge/Framework-Flask-red)
 ![Frontend](https://img.shields.io/badge/Frontend-HTML/CSS/JS-green)
 ![API](https://img.shields.io/badge/API-TMDB-fcba03)
+![NLP](https://img.shields.io/badge/NLP-Naive%20Bayes-orange)
+![ML](https://img.shields.io/badge/ML-scikit--learn-blue)
 
-This application provides all the details of the requested movie such as overview, genre, release date, rating, runtime, top cast, reviews, recommended movies, etc.
+A movie recommendation and sentiment analysis web app. Search for any movie, get its details, see who's in it, get similar recommendations — and read real user reviews with each one automatically labelled as Positive or Negative by an NLP model.
 
-The details of the movies (title, genre, runtime, rating, poster, etc.) are fetched using the [TMDB API](https://www.themoviedb.org/documentation/api). User reviews are also fetched from TMDB's reviews API and passed through a Naive Bayes sentiment classifier to label them as Positive or Negative.
+---
 
-## Link to the application
+## How It Works
 
-Check out the live demo: https://tmc.kishanlal.dev/
+The app has three core capabilities working together: movie data retrieval, content-based recommendation, and NLP-driven sentiment analysis.
 
-If you can't find the movie you're searching for through auto-suggestions while typing, there's no need to worry. Simply type the name of the movie and press "enter". Even if you make some typos, it should still work fine.
+### 1. Movie Data — TMDB API
 
-## 'Invalid Request' Error
+All movie metadata (title, overview, genres, release date, runtime, rating, poster, cast) is fetched from [The Movie Database (TMDB) API](https://www.themoviedb.org/documentation/api) entirely client-side in JavaScript. This includes:
 
-If you're getting an invalid request error, kindly go through this issue — https://github.com/kishan0725/The-Movie-Cinema/issues/2
+- Movie search and details via `/movie/{id}`
+- Top cast via `/movie/{id}/credits`
+- Individual cast details via `/person/{id}`
+- Recommended movies via `/movie/{id}/recommendations`
+- User reviews via `/movie/{id}/reviews`
 
-## How to get the API key?
+### 2. Content-Based Movie Recommendation
 
-Create an account at https://www.themoviedb.org/, click on the `API` link from the left hand sidebar in your account settings and fill in the details to apply for an API key. If you are asked for a website URL, just enter "NA" if you don't have one. The API key will appear in your `API` sidebar once your request is approved.
+The recommendation engine runs on the server side in Flask. It uses a pre-processed dataset (`main_data.csv`) built from multiple Kaggle sources that contains ~10,000 movies with metadata like genres, keywords, cast, director, and taglines combined into a single feature string per movie.
 
-## How to run the project?
+**How similarity is computed:**
 
-1. Clone this repository to your local system.
-2. Install all the libraries listed in [requirements.txt](https://github.com/kishan0725/The-Movie-Cinema/blob/master/requirements.txt) with:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Replace `YOUR_API_KEY` at line 2 of `static/recommend.js` with your TMDB API key.
-4. Retrain the sentiment model (required if your scikit-learn version differs from 0.23.1):
-   ```
-   python retrain_model.py
-   ```
-   This regenerates `nlp_model.pkl` and `tranform.pkl` compatible with your installed scikit-learn version.
-5. Run the app from your project directory:
-   ```
-   python main.py
-   ```
-6. Open your browser and go to `http://127.0.0.1:5000/`.
+1. Each movie's combined feature string is vectorized using `CountVectorizer` (bag-of-words).
+2. Cosine similarity is computed across all movie vectors.
+3. When a movie is selected, the top N most similar movies are returned as recommendations.
 
-## Notes on Reviews & Sentiment Analysis
-
-### Why IMDB scraping was dropped
-The original project scraped user reviews from IMDB using `beautifulsoup4`. This broke in two stages:
-
-1. **2023 redesign** — IMDB rewrote their frontend in React/Next.js. The old HTML class `text show-more__control` no longer exists.
-2. **AWS WAF (2024–2026)** — IMDB added AWS WAF bot protection. All server-side HTTP requests now receive a `202` challenge response with an empty body, making scraping completely impossible without a paid proxy/unblocker service.
-
-### Current approach — TMDB Reviews API
-Reviews are now fetched **client-side** from TMDB's own reviews endpoint:
 ```
-GET https://api.themoviedb.org/3/movie/{movie_id}/reviews
+feature string = genres + keywords + tagline + cast + director
+CountVectorizer → sparse matrix → cosine_similarity → top N matches
 ```
-This uses the same API key already configured in `recommend.js`. Up to 40 reviews (2 pages) are fetched in the browser and sent to Flask for sentiment analysis — no scraping, no bot challenges, no extra dependencies.
 
-### Sentiment Analysis
-Reviews are classified as **Positive** or **Negative** using a Multinomial Naive Bayes model trained on ~6,900 labelled movie reviews. The model achieves ~97% accuracy on a held-out test set.
+This is a classic content-based filtering approach — no user history or collaborative signals needed.
 
-The model is saved as:
-- `nlp_model.pkl` — the trained classifier
-- `tranform.pkl` — the fitted TF-IDF vectorizer
+### 3. NLP Sentiment Analysis
 
-If you see a `NotFittedError` or `InconsistentVersionWarning` on startup, your scikit-learn version differs from the one used to build the `.pkl` files. Regenerate them by running:
+This is the core NLP component of the project. Every user review fetched from TMDB is automatically classified as **Positive 😃** or **Negative 😔**.
+
+#### Pipeline
+
 ```
+Review text (raw string)
+    ↓
+TF-IDF Vectorizer
+  - Lowercasing
+  - ASCII accent stripping
+  - English stop word removal
+  - IDF weighting
+    ↓
+Multinomial Naive Bayes Classifier
+    ↓
+Positive / Negative label
+```
+
+#### Model Details
+
+| Property | Value |
+|---|---|
+| Algorithm | Multinomial Naive Bayes |
+| Vectorizer | TF-IDF (`TfidfVectorizer`) |
+| Training data | ~6,900 labelled movie reviews (`datasets/reviews.txt`) |
+| Test accuracy | ~97.5% (80/20 split, `random_state=42`) |
+| Saved as | `nlp_model.pkl`, `tranform.pkl` |
+
+The model is trained on a dataset of real movie reviews labelled `1` (positive) or `0` (negative). TF-IDF converts each review into a weighted term-frequency vector, downweighting common words that appear across many documents. Multinomial Naive Bayes then applies Bayes' theorem over word feature probabilities to classify the sentiment.
+
+#### Why Naive Bayes for text?
+
+- Works well on sparse, high-dimensional data like TF-IDF vectors
+- Fast to train and predict
+- Strong baseline for short text classification
+- Achieves near state-of-the-art on sentiment tasks with limited data
+
+---
+
+## Architecture
+
+```
+Browser (JS)
+    │
+    ├─ TMDB API calls (search, cast, recommendations, reviews)
+    │       ↓
+    │   reviews collected as JSON array
+    │
+    └─ POST /recommend  ──────────────────────────────────────────────┐
+            (movie metadata + reviews JSON)                           │
+                                                                      ▼
+                                                              Flask (main.py)
+                                                                      │
+                                                     ┌────────────────┴──────────────────┐
+                                                     │                                   │
+                                              Recommendation                     Sentiment Analysis
+                                              Engine                             (NLP pipeline)
+                                              (cosine similarity                 TF-IDF → Naive Bayes
+                                               on main_data.csv)                 per review
+                                                     │                                   │
+                                                     └────────────────┬──────────────────┘
+                                                                      │
+                                                              render recommend.html
+                                                              (movie info + cast +
+                                                               recommendations +
+                                                               reviews with labels)
+```
+
+---
+
+## Project Structure
+
+```
+├── main.py                  # Flask app — recommendation + sentiment logic
+├── retrain_model.py         # Retrain NLP model (run after upgrading scikit-learn)
+├── nlp_model.pkl            # Trained Naive Bayes classifier
+├── tranform.pkl             # Fitted TF-IDF vectorizer
+├── main_data.csv            # Processed movie dataset for recommendations
+├── datasets/
+│   ├── reviews.txt          # Labelled review dataset for training (6,918 rows)
+│   ├── final_data.csv       # Cleaned movie metadata
+│   └── movie_metadata.csv   # Raw movie metadata
+├── static/
+│   ├── recommend.js         # All TMDB API calls + review fetching
+│   ├── autocomplete.js      # Movie title autocomplete
+│   └── style.css
+└── templates/
+    ├── home.html            # Search page
+    └── recommend.html       # Results page (movie details + sentiment table)
+```
+
+---
+
+## Setup & Running
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/niytdv/NLP-PROJECT.git
+cd NLP-PROJECT
+```
+
+### 2. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Get a TMDB API key
+
+Create a free account at [themoviedb.org](https://www.themoviedb.org/), go to **Settings → API**, and request an API key. If asked for a website URL, enter `NA`.
+
+### 4. Add your API key
+
+Open `static/recommend.js` and replace `YOUR_API_KEY` on line 2:
+
+```javascript
+var myAPI = 'YOUR_API_KEY'
+```
+
+### 5. Retrain the NLP model (if needed)
+
+The `.pkl` files must match your installed scikit-learn version. If you see a `NotFittedError` or `InconsistentVersionWarning` on startup, regenerate them:
+
+```bash
 python retrain_model.py
 ```
 
-## Sources of the datasets
+### 6. Run
 
-1. [IMDB 5000 Movie Dataset](https://www.kaggle.com/carolzhangdc/imdb-5000-movie-dataset)
-2. [The Movies Dataset](https://www.kaggle.com/rounakbanik/the-movies-dataset)
-3. [List of movies in 2018](https://en.wikipedia.org/wiki/List_of_American_films_of_2018)
-4. [List of movies in 2019](https://en.wikipedia.org/wiki/List_of_American_films_of_2019)
-5. [List of movies in 2020](https://en.wikipedia.org/wiki/List_of_American_films_of_2020)
+```bash
+python main.py
+```
+
+Open `http://127.0.0.1:5000` in your browser.
+
+---
+
+## A Note on IMDB Scraping
+
+The original project scraped user reviews from IMDB using `beautifulsoup4`. This no longer works for two reasons:
+
+- **2023** — IMDB rewrote their frontend in React/Next.js. The old HTML class `text show-more__control` no longer exists in the DOM.
+- **2024–2026** — IMDB deployed AWS WAF bot protection. All server-side HTTP requests receive a `202` challenge response with an empty body. There is no workaround without a paid residential proxy service.
+
+Reviews are now fetched from **TMDB's own reviews API** (`/movie/{id}/reviews`) client-side in JavaScript — same API key, no scraping, no bot detection.
+
+---
+
+## Datasets
+
+| Dataset | Source |
+|---|---|
+| IMDB 5000 Movie Dataset | [Kaggle](https://www.kaggle.com/carolzhangdc/imdb-5000-movie-dataset) |
+| The Movies Dataset | [Kaggle](https://www.kaggle.com/rounakbanik/the-movies-dataset) |
+| Movies of 2018 | [Wikipedia](https://en.wikipedia.org/wiki/List_of_American_films_of_2018) |
+| Movies of 2019 | [Wikipedia](https://en.wikipedia.org/wiki/List_of_American_films_of_2019) |
+| Movies of 2020 | [Wikipedia](https://en.wikipedia.org/wiki/List_of_American_films_of_2020) |
+
+---
 
 Please do ⭐ the repository if it helped you in any way.
